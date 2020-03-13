@@ -9,16 +9,20 @@ CARBON_SERVER = '127.0.0.1'
 CARBON_PORT = 2003
 
 class FuncDefVisitor(c_ast.NodeVisitor):
-    def __init__(self):
+    def __init__(self, fname):
         self.func_count = 0
         self.param_count = 0
         self.total_fun_len = 0
+        self.fname = fname
     def report_func(self, fun_name, length, param_count):
         print("{} {} lines, {} params".format(fun_name, length, param_count))
         self.func_count += 1
         self.param_count += param_count
         self.total_fun_len += length
     def visit_FuncDef(self, node):
+        if node.coord.file != self.fname:
+            #Do not count included functions
+            return
         name = node.decl.name
         param_count = len(node.decl.type.args.params)
         if node.body.block_items:
@@ -46,7 +50,7 @@ def send_to_carbon(prefix, stats):
 
 def show_func_lens(filename):
     ast = parse_file(filename, use_cpp=True, cpp_path='clang', cpp_args=['-E', '-Iutils/fake_libc_include', '--std=c11'])
-    v = FuncDefVisitor()
+    v = FuncDefVisitor(filename)
     v.visit(ast)
     send_to_carbon('vector', v.stats())
 
