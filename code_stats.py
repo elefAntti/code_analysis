@@ -4,6 +4,7 @@
 from pycparser import c_parser, c_ast, parse_file
 import time
 import socket
+import os
 
 CARBON_SERVER = '127.0.0.1'
 CARBON_PORT = 2003
@@ -20,27 +21,73 @@ def last_line(node):
             return last_child 
 
 def block_length(node):
-    return last_line(node) - node.coord.line
+    return max(1, last_line(node) - node.coord.line - 1)
 
 def mean(x):
     return sum(x) / max(1, len(x))
 
-class NestingDepthVisitor(c_ast.NodeVisitor):
-    def __init__(self, fname):
-        self.fname = fname
+def count_decls(node):
+    children = node.children()
+    consts = 0
+    statics = 0
+    regular = 0
+    if not children:
+        return (0, 0, 0)
+    else:
+        for _, child in children:
+            if type(child) == c_ast.Decl and type(child.type) == c_ast.TypeDecl:
+                if 'const' in child.quals:
+                    consts += 1
+                elif 'static' in child.storage:
+                    statics += 1
+                else:
+                    regular += 1
+        return (consts, statics, regular)
+
+def global_stats(ast):
+    decls = count_decls(ast)
+    return {'global_vars': decls[1] + decls[2], 'extern_vars': decls[2]}
+
+class StatsVisitor(c_ast.NodeVisitor):
+    def __init__(self):
+        self.fname = ""
         self.depth = 0
         self.area = 0
         self.max_depth = 0
         self.max_depths = []
         self.total_flen = 0
+        self.statics = 0 
+        self.regular_vars = 0 
+        self.has_statics = False
+        self.funcs_with_statics = 0
+        self.func_count = 0
+        self.param_count = 0
+        self.total_fun_len = 0
+        self.global_vars = 0
+        self.static_global_vars = 0
+        self.file_count = 0
+    def process_file(self, filename, ast):
+        self.fname = filename
+        self.file_count += 1
+        decls = count_decls(ast)
+        self.static_global_vars += decls[1]
+        self.global_vars += decls[2]
+        self.visit(ast)
     def visit_FuncDef(self, node):
         if node.coord.file != self.fname:
             #Do not count included functions
             return
         self.total_flen += block_length(node.body)
         self.max_depth = 0
-        self.generic_visit(node.body)
+        self.has_statics = False
+        self.recursion(node)
+        if self.has_statics:
+            self.funcs_with_statics += 1
         self.max_depths.append(self.max_depth)
+        self.func_count += 1
+        param_count = len(node.decl.type.args.params)
+        self.param_count += param_count
+
     def visit_If(self, node):
         self.recursion(node)
     def visit_For(self, node):
@@ -61,6 +108,11 @@ class NestingDepthVisitor(c_ast.NodeVisitor):
         self.generic_visit(node)
         self.depth -= 1
     def visit_Compound(self, node):
+        decls = count_decls(node)
+        self.statics += decls[1]
+        self.regular_vars += decls[2]
+        if decls[1] > 0:
+            self.has_statics = True
         block_len = block_length(node)
         self.generic_visit(node)
         self.area += block_len
@@ -68,32 +120,15 @@ class NestingDepthVisitor(c_ast.NodeVisitor):
         return {
             "max_nesting_depth": max(self.max_depths),
             "avg_max_nesting_depth": mean(self.max_depths),
-            "average_nesting_depth": self.area / self.total_flen
-        }
-
-class FuncDefVisitor(c_ast.NodeVisitor):
-    def __init__(self, fname):
-        self.func_count = 0
-        self.param_count = 0
-        self.total_fun_len = 0
-        self.fname = fname
-    def report_func(self, fun_name, length, param_count):
-        print("{} {} lines, {} params".format(fun_name, length, param_count))
-        self.func_count += 1
-        self.param_count += param_count
-        self.total_fun_len += length
-    def visit_FuncDef(self, node):
-        if node.coord.file != self.fname:
-            #Do not count included functions
-            return
-        name = node.decl.name
-        param_count = len(node.decl.type.args.params)
-        self.report_func(name, max(1, block_length(node.body) - 1), param_count)
-    def stats(self):
-        return {
+            "average_nesting_depth": self.area / self.total_flen,
+            "funcs_with_statics": self.funcs_with_statics,
             'function_count': self.func_count,
-            'average_function_length': self.total_fun_len / self.func_count,
-            'average_function_params': self.param_count / self.func_count
+            'average_function_length': self.total_flen / self.func_count,
+            'average_function_params': self.param_count / self.func_count,
+            'average_variable_count': (self.regular_vars + self.statics) / self.func_count,
+            'global_vars': self.global_vars + self.static_global_vars,
+            'extern_vars': self.global_vars,
+            'file_count': self.file_count
         }
 
 def send_to_carbon(prefix, stats):
@@ -106,16 +141,17 @@ def send_to_carbon(prefix, stats):
     sock.sendall(message.encode('utf-8'))
     sock.close()
 
-def show_func_lens(filename):
-    ast = parse_file(filename, use_cpp=True, cpp_path='clang', cpp_args=['-E', '-Iutils/fake_libc_include', '--std=c11'])
-    fdv = FuncDefVisitor(filename)
-    fdv.visit(ast)
-    ndv = NestingDepthVisitor(filename)
-    ndv.visit(ast)
-    stats = {**fdv.stats(), **ndv.stats()}
+def compute_stats(path):
+    ndv = StatsVisitor()
+    for filename in os.listdir(path):
+        filename = "/".join([path, filename])
+        print(filename)
+        ast = parse_file(filename, use_cpp=True, cpp_path='clang', cpp_args=['-E', '-Iutils/fake_libc_include', '--std=c11'])
+        ndv.process_file(filename, ast)
+    stats = ndv.stats()
     print(stats)
     send_to_carbon('vector', stats)
 
-show_func_lens("data/vector.c")
+compute_stats("data")
 
 
