@@ -23,6 +23,14 @@ def last_line(node):
 def block_length(node):
     return max(1, last_line(node) - node.coord.line - 1)
 
+def count_params(node):
+    basic_count = len(node.decl.type.args.params)
+    if basic_count == 1:
+        itype = node.decl.type.args.params[0].type.type
+        if type(itype) == c_ast.IdentifierType and itype.names[0] == 'void':
+            return 0
+    return basic_count
+
 def mean(x):
     return sum(x) / max(1, len(x))
 
@@ -44,10 +52,6 @@ def count_decls(node):
                     regular += 1
         return (consts, statics, regular)
 
-def global_stats(ast):
-    decls = count_decls(ast)
-    return {'global_vars': decls[1] + decls[2], 'extern_vars': decls[2]}
-
 class StatsVisitor(c_ast.NodeVisitor):
     def __init__(self):
         self.fname = ""
@@ -66,6 +70,11 @@ class StatsVisitor(c_ast.NodeVisitor):
         self.global_vars = 0
         self.static_global_vars = 0
         self.file_count = 0
+        self.funcs_with_no_params = 0
+        self.funcs_with_many_params = 0
+        self.long_functions = 0
+        self.huge_functions = 0
+
     def process_file(self, filename, ast):
         self.fname = filename
         self.file_count += 1
@@ -77,7 +86,12 @@ class StatsVisitor(c_ast.NodeVisitor):
         if node.coord.file != self.fname:
             #Do not count included functions
             return
-        self.total_flen += block_length(node.body)
+        func_len = block_length(node.body)
+        self.total_flen += func_len
+        if func_len > 50:
+            self.long_functions += 1
+        if func_len > 300:
+            self.huge_functions += 1
         self.max_depth = 0
         self.has_statics = False
         self.recursion(node)
@@ -85,7 +99,11 @@ class StatsVisitor(c_ast.NodeVisitor):
             self.funcs_with_statics += 1
         self.max_depths.append(self.max_depth)
         self.func_count += 1
-        param_count = len(node.decl.type.args.params)
+        param_count = count_params(node)
+        if param_count == 0:
+            self.funcs_with_no_params += 1
+        if param_count > 4:
+            self.funcs_with_many_params += 1
         self.param_count += param_count
 
     def visit_If(self, node):
@@ -128,7 +146,11 @@ class StatsVisitor(c_ast.NodeVisitor):
             'average_variable_count': (self.regular_vars + self.statics) / self.func_count,
             'global_vars': self.global_vars + self.static_global_vars,
             'extern_vars': self.global_vars,
-            'file_count': self.file_count
+            'file_count': self.file_count,
+            'functions_without_params': self.funcs_with_no_params, 
+            'functions_with_many_params': self.funcs_with_many_params,
+            'long_functions': self.long_functions,
+            'really_long_functions': self.huge_functions
         }
 
 def send_to_carbon(prefix, stats):
