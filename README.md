@@ -1,7 +1,8 @@
 # Code Analysis
 Analyzing C source code with python to compile statistics.
 The aim is to push these statistics to Graphite/Grafana for visualization.
-Using pycparser to parse the code.
+
+Using [pycparser](https://github.com/eliben/pycparser) to parse the code. The code in utils/fake_libc_include is Copyright (c) 2008-2017, Eli Bendersky All rights reserved. Licensed under the 3-clause BSD license in that folder.
 
 ![Grafana dashboard screenshot](docs/Grafana.png)
 
