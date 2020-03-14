@@ -20,7 +20,7 @@ Currently following stats are extracted:
 | global_vars | Number of non-constant static or extern global variables | 
 | extern_vars | Number of non-constant extern variables |
 | file_count | Number of files prcessed |
-| functions_without_params | Number of functions without any parameters |
+| functions_without_params | Number of functions without any parameters |
 | functions_with_many_params | Number of functions with over 4 parameters |
 | long_functions | Number of long functions |
-| really_long_functions | Number of really long functions |
+| really_long_functions | Number of really long functions |
